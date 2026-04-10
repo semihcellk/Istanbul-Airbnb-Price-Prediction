@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# PyCharm etc
+.idea/
+.vscode/
+
+# Data sets
+data/calendar.csv
+data/reviews.csv
+data/train.csv
+data/test.csv
+data/interim/
+data/processed/
+data/submission/
+afterBaseline/
+!data/sample_submission.csv
