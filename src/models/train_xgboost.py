@@ -27,25 +27,49 @@ TEST_PATH = 'data/processed/test/engineered_test.csv'
 SUBMISSION_PATH = 'data/submission/submission.csv'
 
 def clean_currency_percent(x):
-    # Clean currency and percentage strings
+    """Clean currency and percentage strings into numeric float values.
+
+    Strips '$', '%', ',' characters and converts to float.
+    Returns np.nan for unparseable or placeholder values like 'N/A'.
+    """
     if isinstance(x, str):
         x = x.replace('%', '').replace('$', '').replace(',', '').strip()
         if x in ['N/A', '', 'Unknown', 'nan']: 
             return np.nan
         try: 
             return float(x)
-        except: 
+        except (ValueError, TypeError): 
             return np.nan
     return x
 
 def sanitize_column_names(df):
-    # Remove special characters from column names for XGBoost compatibility
+    """Remove special characters from column names for XGBoost compatibility.
+
+    XGBoost requires feature names to contain only alphanumeric characters
+    and underscores. This function strips all other characters.
+    """
     new_cols = [re.sub(r'[^A-Za-z0-9_]', '', str(c)) for c in df.columns]
     df.columns = new_cols
     return df
 
 def target_encode(train_df, test_df, col, target_col='price', n_splits=5, smoothing=10):
-    # Target encoding with smoothing to prevent overfitting
+    """Apply target encoding with smoothing using K-Fold cross-validation.
+
+    For training data, uses K-Fold CV to avoid target leakage.
+    For test data, computes smoothed means using the full training set.
+    Unseen categories are filled with the global target mean.
+
+    Args:
+        train_df: Training DataFrame (modified in-place).
+        test_df: Test DataFrame (modified in-place).
+        col: Categorical column name to encode.
+        target_col: Target variable column name.
+        n_splits: Number of CV folds.
+        smoothing: Smoothing strength (higher = more regularization).
+
+    Returns:
+        Tuple of (train_df, test_df) with the new encoded column added.
+    """
 
     kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
     new_col = f'{col}_target_enc'
@@ -84,7 +108,15 @@ def target_encode(train_df, test_df, col, target_col='price', n_splits=5, smooth
     return train_df, test_df
 
 def load_and_preprocess():
-    # Load and preprocess data with improved outlier handling
+    """Load engineered data, remove outliers, encode categoricals, and prepare X/y.
+
+    Pipeline: load CSVs → IQR + Z-score outlier removal → drop junk columns →
+    clean currency/percent strings → target encode categoricals →
+    label encode remaining objects → sanitize column names.
+
+    Returns:
+        Tuple of (X_train, y_train, X_test) ready for model training.
+    """
     df_train = pd.read_csv(TRAIN_PATH)
     df_test = pd.read_csv(TEST_PATH)
     
@@ -158,8 +190,11 @@ def load_and_preprocess():
     y = np.log1p(df_train['price'])  # Log transform target
     X_test = df_test.copy()
     
-    # Align test columns with train
-    X_test = X_test[[c for c in X.columns if c in X_test.columns]]
+    # Align test columns with train (add missing columns as NaN, drop extras)
+    missing_cols = [c for c in X.columns if c not in X_test.columns]
+    for col in missing_cols:
+        X_test[col] = np.nan
+    X_test = X_test[X.columns]
     
     # LABEL ENCODING
     cat_cols = X.select_dtypes(include=['object']).columns.tolist()
@@ -185,7 +220,11 @@ def load_and_preprocess():
     return X, y, X_test
 
 def objective_xgb(trial, X, y, n_splits=10):
-    # XGBoost hyperparameter optimization with 10-fold CV
+    """Optuna objective function for XGBoost hyperparameter optimization.
+
+    Evaluates hyperparameter combinations using K-Fold CV and returns
+    the mean RMSE across folds (minimization target).
+    """
     param = {
         'tree_method': 'hist',
         'random_state': 42,
@@ -220,8 +259,14 @@ def objective_xgb(trial, X, y, n_splits=10):
     return np.mean(scores)
 
 def train_xgboost_model(X, y, X_test, n_trials=30):
-    # Train XGBoost model with Optuna optimization and 10-fold CV
+    """Train XGBoost with Optuna tuning and ensemble predictions via K-Fold CV.
 
+    Steps: 1) Optuna search for best hyperparameters, 2) retrain with
+    more estimators across K folds, 3) average fold predictions for test set.
+
+    Returns:
+        Tuple of (final_predictions in original scale, list of CV RMSE scores).
+    """
     if DEMO_MODE:
         print("DEMO MODE ACTIVE")
         n_trials = 1       
@@ -264,7 +309,7 @@ def train_xgboost_model(X, y, X_test, n_trials=30):
     cv_scores = []
     
     for fold, (train_idx, val_idx) in enumerate(kf.split(X, y)):
-        print(f"\nFold {fold+1}/10")
+        print(f"\nFold {fold+1}/{cv_splits}")
         
         X_train, y_train = X.iloc[train_idx], y.iloc[train_idx]
         X_val, y_val = X.iloc[val_idx], y.iloc[val_idx]
@@ -281,8 +326,8 @@ def train_xgboost_model(X, y, X_test, n_trials=30):
         print(f"Validation RMSE: {fold_rmse:.5f}")
         print(f"Best iteration: {model.best_iteration}")
         
-        # Test prediction
-        test_preds += model.predict(X_test) / 10
+        # Test prediction (average across all folds)
+        test_preds += model.predict(X_test) / cv_splits
     
     print("CROSS-VALIDATION RESULTS:")
     print(f"Mean CV RMSE: {np.mean(cv_scores):.5f} (+/- {np.std(cv_scores):.5f})")

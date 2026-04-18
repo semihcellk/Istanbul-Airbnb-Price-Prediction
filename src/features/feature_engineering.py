@@ -38,6 +38,15 @@ COORDS = {
 REFERENCE_DATE = pd.to_datetime('2025-06-27')
 
 def haversine_distance(lat1, lon1, lat2, lon2):
+    """Calculate the great-circle distance between two points on Earth using the Haversine formula.
+
+    Args:
+        lat1, lon1: Latitude and longitude of the first point (in degrees).
+        lat2, lon2: Latitude and longitude of the second point (in degrees).
+
+    Returns:
+        Distance in kilometers.
+    """
     R = 6371
     phi1, phi2 = np.radians(lat1), np.radians(lat2)
     dphi = np.radians(lat2 - lat1)
@@ -47,7 +56,14 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     return R * c
 
 def load_calendar_features():
-    # Extract features from calendar.csv
+    """Extract temporal features from the Kaggle calendar.csv file.
+
+    Computes availability ratios, min/max night statistics, consecutive
+    availability blocks, and availability change frequency per listing.
+
+    Returns:
+        pd.DataFrame: Calendar-derived features indexed by listing id.
+    """
     calendar_df = pd.read_csv(CALENDAR_PATH)
     
     calendar_features = calendar_df.groupby('listing_id').agg({
@@ -71,7 +87,7 @@ def load_calendar_features():
                 (x['available_binary'] != x['available_binary'].shift()).cumsum()
             ).sum().max(),
             'availability_changes': (x['available_binary'] != x['available_binary'].shift()).sum()
-        })
+        }), include_groups=False
     ).reset_index()
     
     calendar_features = calendar_features.merge(availability_stats, left_on='id', right_on='listing_id', how='left')
@@ -81,7 +97,15 @@ def load_calendar_features():
     return calendar_features
 
 def load_review_features():
-    # Extract features from reviews.csv
+    """Extract review-based features from the Kaggle reviews.csv file.
+
+    Computes total review counts, recency windows (30/90/180/365 days),
+    time-since-first/last review, average inter-review gaps, and
+    review frequency per listing.
+
+    Returns:
+        pd.DataFrame: Review-derived features indexed by listing id.
+    """
     reviews_df = pd.read_csv(REVIEWS_PATH)
     reviews_df['date'] = pd.to_datetime(reviews_df['date'], errors='coerce')
     
@@ -101,7 +125,7 @@ def load_review_features():
         'days_since_first_review': x['days_ago'].max() if len(x) > 0 else np.nan,
         'avg_days_between_reviews': x['days_ago'].diff().abs().mean() if len(x) > 1 else np.nan,
         'review_frequency': len(x) / (x['days_ago'].max() + 1) if len(x) > 0 and x['days_ago'].max() > 0 else 0
-    })).reset_index()
+    }), include_groups=False).reset_index()
     
     # Merge all review features
     review_features = review_counts.merge(recent_reviews, on='listing_id', how='left')
@@ -111,6 +135,21 @@ def load_review_features():
     return review_features
 
 def engineer_features(dataframe, is_train=True, kmeans_model=None, neigh_stats=None):
+    """Apply all feature engineering transformations to a train or test DataFrame.
+
+    Creates date, amenity, location/clustering, ratio, host quality,
+    review score, interaction, text mining, neighbourhood statistics,
+    and availability/booking features.
+
+    Args:
+        dataframe: Raw input DataFrame.
+        is_train: Whether this is training data (used for neighbourhood stats).
+        kmeans_model: Pre-fitted KMeans model (None for train, reused for test).
+        neigh_stats: Pre-computed neighbourhood statistics (None for train).
+
+    Returns:
+        Tuple of (engineered DataFrame, KMeans model, neighbourhood stats).
+    """
     data = dataframe.copy()
     
     print(f"Starting feature engineering for {'train' if is_train else 'test'}...")
@@ -130,7 +169,7 @@ def engineer_features(dataframe, is_train=True, kmeans_model=None, neigh_stats=N
         def count_amenities(x):
             try: 
                 return len(ast.literal_eval(x.replace('{', '[').replace('}', ']')))
-            except: 
+            except (ValueError, SyntaxError): 
                 return 0
         
         data['amenity_count'] = data['amenities'].astype(str).apply(count_amenities)
@@ -195,7 +234,7 @@ def engineer_features(dataframe, is_train=True, kmeans_model=None, neigh_stats=N
     
     # HOST QUALITY FEATURES
     # Host quality score
-    data['host_is_superhost_binary'] = data['host_is_superhost'].map({'t': 1, 'f': 0, 't': 1, 'f': 0}).fillna(0)
+    data['host_is_superhost_binary'] = data['host_is_superhost'].map({'t': 1, 'f': 0}).fillna(0)
     data['host_identity_verified_binary'] = data['host_identity_verified'].map({'t': 1, 'f': 0}).fillna(0)
     data['host_has_profile_pic_binary'] = data['host_has_profile_pic'].map({'t': 1, 'f': 0}).fillna(0)
     
@@ -258,9 +297,9 @@ def engineer_features(dataframe, is_train=True, kmeans_model=None, neigh_stats=N
     # TEXT MINING
     # Combine text fields
     data['text_features'] = (
-        data['name'].astype(str).fillna('') + " " + 
-        data['description'].astype(str).fillna('') + " " +
-        data['neighborhood_overview'].astype(str).fillna('')
+        data['name'].fillna('').astype(str) + " " + 
+        data['description'].fillna('').astype(str) + " " +
+        data['neighborhood_overview'].fillna('').astype(str)
     )
     data['text_features'] = data['text_features'].str.lower()
     
